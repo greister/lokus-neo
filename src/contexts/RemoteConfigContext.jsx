@@ -288,10 +288,17 @@ export const RemoteConfigProvider = ({ children }) => {
     }, [config.feature_flags, advancedFeatures]);
 
     const fetchConfig = async () => {
+        // Without a timeout a stalled request (no network / blocked proxy)
+        // keeps `loading` true indefinitely and can leave a Preferences window
+        // looking hung. Abort after 8s and fall back to DEFAULT_CONFIG.
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 8000);
         try {
             setLoading(true);
             // Add a timestamp to prevent caching
-            const response = await fetch(`${REMOTE_CONFIG_URL}?t=${Date.now()}`);
+            const response = await fetch(`${REMOTE_CONFIG_URL}?t=${Date.now()}`, {
+                signal: controller.signal
+            });
 
             if (!response.ok) {
                 throw new Error(`Failed to fetch config: ${response.status}`);
@@ -306,6 +313,7 @@ export const RemoteConfigProvider = ({ children }) => {
             setError(err);
             // Keep using default config (already set in initial state)
         } finally {
+            clearTimeout(timeoutId);
             setLoading(false);
         }
     };

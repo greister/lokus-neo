@@ -1175,8 +1175,21 @@ pub fn run() {
         WindowEvent::CloseRequested { api, .. } => {
           let label = window.label().to_string();
 
-          // Modal windows (preferences) close and are destroyed normally.
+          // Modal windows (preferences) have no dirty editors to flush, but we
+          // still destroy them from Rust instead of relying on Tauri's default
+          // close path. When the WebView2 renderer hangs (offline auth probe,
+          // remote-config fetch, GPU hiccup, ...) the default path can leave the
+          // window alive with a dead X button. A worker-thread destroy() keeps
+          // the close responsive regardless of renderer state.
           if label == "prefs" {
+            api.prevent_close();
+            let win = window.clone();
+            std::thread::spawn(move || {
+              std::thread::sleep(std::time::Duration::from_millis(100));
+              if win.destroy().is_err() {
+                let _ = win.hide();
+              }
+            });
             return;
           }
 

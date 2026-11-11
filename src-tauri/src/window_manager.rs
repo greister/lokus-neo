@@ -102,6 +102,10 @@ pub fn open_workspace_window(app: AppHandle, workspace_path: String) -> Result<(
 pub fn open_preferences_window(app: AppHandle, workspace_path: Option<String>, section: Option<String>) -> Result<(), String> {
   let label = "prefs";
   if let Some(win) = app.get_webview_window(label) {
+    // A window left hidden by a failed close is effectively a zombie: focusing
+    // it does nothing and the user sees "Preferences won't open / won't close".
+    // Always make the existing window visible before focusing it.
+    let _ = win.show();
     focus(&win);
     // If section is provided, emit event to navigate to that section
     if let Some(s) = section {

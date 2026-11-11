@@ -23,6 +23,7 @@ import {
 } from '../utils/plainTextNote.js';
 import { isImageFile } from '../utils/imageUtils';
 import { isPDFFile } from '../utils/pdfUtils';
+import { isHtmlFile } from '../utils/htmlUtils';
 import { LazyImageViewer, LazyPDFViewer } from './OptimizedWrapper';
 import { useFeatureFlags } from '../contexts/RemoteConfigContext';
 import { noteMutationClient } from '../core/notes/NoteMutationClient.js';
@@ -37,7 +38,8 @@ const isNonEditorPath = (p) =>
   p.endsWith('.kanban') ||
   p.endsWith('.graph') ||
   isImageFile(p) ||
-  isPDFFile(p);
+  isPDFFile(p) ||
+  isHtmlFile(p);
 
 // Lazy-loaded special tab views
 const BasesView = lazy(() => import('../bases/BasesView'));
@@ -47,6 +49,9 @@ const MathGraphEditor = lazy(() => import('./MathGraph/MathGraphEditor.jsx'));
 // put it (and a modulepreload for it) in the boot payload of every window,
 // whether or not the user ever opens a canvas.
 const Canvas = lazy(() => import('../views/Canvas'));
+// Sandboxed web view for .html/.htm files (blob: preview; the CSP directives
+// this needs are configured in src-tauri/tauri.conf.json and tauri.windows.conf.json)
+const HtmlViewer = lazy(() => import('./HtmlViewer/HtmlViewerTab'));
 
 /**
  * EditorGroup — a single editor pane with its own tabs and ONE persistent
@@ -509,7 +514,8 @@ export default function EditorGroup({
   const isImageFileActive = !!(activeFile && isImageFile(activeFile));
   const isPDFFileActive = !!(activeFile && isPDFFile(activeFile));
   const isMathGraphFile = !!(activeFile?.endsWith('.graph'));
-  const isEditorFile = !!(activeFile && !activeFile.startsWith('__') && !activeFile.endsWith('.canvas') && !activeFile.endsWith('.excalidraw') && !activeFile.endsWith('.kanban') && !activeFile.endsWith('.graph') && !isImageFileActive && !isPDFFileActive);
+  const isHtmlFileActive = !!(activeFile && isHtmlFile(activeFile));
+  const isEditorFile = !!(activeFile && !activeFile.startsWith('__') && !activeFile.endsWith('.canvas') && !activeFile.endsWith('.excalidraw') && !activeFile.endsWith('.kanban') && !activeFile.endsWith('.graph') && !isImageFileActive && !isPDFFileActive && !isHtmlFileActive);
   // DEPRECATED: .canvas (TLDraw) format is no longer supported
   const isCanvasFile = !!(activeFile?.endsWith('.canvas'));
   const isExcalidrawFile = !!(activeFile?.endsWith('.excalidraw'));
@@ -665,6 +671,15 @@ export default function EditorGroup({
           <div className="flex-1 overflow-hidden h-full">
             <Suspense fallback={<div className="flex-1 flex items-center justify-center text-app-muted">Loading...</div>}>
               <LazyPDFViewer file={activeFile} />
+            </Suspense>
+          </div>
+        )}
+
+        {/* HTML viewer — rendered for .html/.htm files (web preview) */}
+        {isHtmlFileActive && (
+          <div className="flex-1 overflow-hidden h-full">
+            <Suspense fallback={<div className="flex-1 flex items-center justify-center text-app-muted">Loading page...</div>}>
+              <HtmlViewer filePath={activeFile} />
             </Suspense>
           </div>
         )}

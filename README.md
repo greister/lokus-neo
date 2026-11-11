@@ -1,3 +1,20 @@
+> ## ⚠️ This is a personal fork — not an official Lokus release
+>
+> **`greister/lokus-neo`** is a customized fork of
+> [lokus-ai/lokus](https://github.com/lokus-ai/lokus) at commit
+> [`dea4909`](https://github.com/lokus-ai/lokus/commit/dea4909dc536854cf59e378895e52fd3b9f015b9)
+> (2026-08-27). Upstream is licensed **FCL-1.0-MIT** and the original
+> [`LICENSE`](LICENSE) is retained unchanged.
+>
+> This fork adds **in-app HTML report preview** plus a handful of reliability
+> fixes. It is maintained for personal/local use, is **not** affiliated with
+> the Lokus team, and receives no upstream support. See
+> [`FORK-NOTES.md`](FORK-NOTES.md) for the complete change list, build
+> instructions and the **security trade-offs** the preview introduces.
+>
+> For the official application, downloads and documentation, see
+> <https://github.com/lokus-ai/lokus> and <https://lokusmd.com>.
+
 <div align="center">
 
 <img src="assets/lokus-logo.svg" alt="Lokus" width="120" height="120" />

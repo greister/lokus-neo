@@ -27,7 +27,8 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' asset: https://asset.localhost blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: https: blob: asset: https://asset.localhost; font-src 'self' data:; connect-src 'self' https: wss: asset: https://asset.localhost; media-src 'self' data: blob: asset: https://asset.localhost; object-src 'none'; frame-src 'self' blob:; base-uri 'self'; form-action 'none'; upgrade-insecure-requests;",
+      "dangerousDisableAssetCspModification": true,
+      "csp": "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' asset: https://asset.localhost blob: https: http://127.0.0.1:8090; style-src 'self' 'unsafe-inline' https: blob: http://127.0.0.1:8090; img-src 'self' data: https: blob: asset: https://asset.localhost; font-src 'self' data: https:; connect-src 'self' https: wss: asset: https://asset.localhost http://127.0.0.1:8090; media-src 'self' data: blob: asset: https://asset.localhost; object-src 'none'; frame-src 'self' blob:; base-uri 'self'; form-action 'none'; upgrade-insecure-requests;",
       "assetProtocol": {
         "enable": true,
         "scope": ["$HOME/.lokus/**", "$DOCUMENT/**", "$DESKTOP/**", "$DOWNLOAD/**", "$PICTURE/**"]

@@ -44,21 +44,34 @@ export const AuthProvider = ({ children }) => {
       }
     });
 
-    // Initial state check
-    authManager.checkAuthStatus().then(() => {
-      setAuthState(prev => {
-        const newAuthState = {
-          ...prev,
-          isAuthenticated: authManager.isLoggedIn,
-          user: authManager.currentUser,
-          isGuest: authManager.isGuest,
-          isLoading: false
-        };
-        return newAuthState;
-      });
-    });
+    // Initial state check. A hung or offline auth probe must never leave
+    // `isLoading` true forever: AuthGate blocks the entire Preferences window
+    // on it, which presents as a blank window that also feels unclosable.
+    let cancelled = false;
+    const settle = () => {
+      if (cancelled) return;
+      setAuthState(prev => ({
+        ...prev,
+        isAuthenticated: authManager.isLoggedIn,
+        user: authManager.currentUser,
+        isGuest: authManager.isGuest,
+        isLoading: false
+      }));
+    };
+    const authTimeoutId = setTimeout(settle, 8000);
+    const onSettled = () => {
+      clearTimeout(authTimeoutId);
+      settle();
+    };
+    Promise.resolve()
+      .then(() => authManager.checkAuthStatus())
+      .then(onSettled, onSettled);
 
-    return unsubscribe;
+    return () => {
+      cancelled = true;
+      clearTimeout(authTimeoutId);
+      unsubscribe();
+    };
   }, []);
 
   // Legacy sign in (Google OAuth)

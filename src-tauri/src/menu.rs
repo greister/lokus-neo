@@ -461,7 +461,24 @@ pub fn init(app: &AppHandle) -> tauri::Result<()> {
         let _ = emit_focused(app, "lokus:close-tab", ());
       }
       FILE_CLOSE_WINDOW_ID => {
+        // Normal path: let the renderer flush dirty editors and close itself.
+        // Fallback: if the renderer is hung, `lokus:close-window` is never
+        // handled and the window (especially Preferences) becomes unclosable.
+        // Destroy it from Rust after a short grace period so the native menu /
+        // Ctrl+Shift+W always works. destroy() is a no-op when the window is
+        // already gone.
+        let _ = emit_focused(app, "lokus:flush-dirty", ());
         let _ = emit_focused(app, "lokus:close-window", ());
+        let app_handle = app.clone();
+        let label = app_handle.state::<crate::FocusTracker>().get();
+        std::thread::spawn(move || {
+          std::thread::sleep(std::time::Duration::from_millis(1200));
+          if let Some(l) = label {
+            if let Some(win) = app_handle.get_webview_window(&l) {
+              let _ = win.destroy();
+            }
+          }
+        });
       }
       FILE_SAVE_ID => {
         let _ = emit_focused(app, "lokus:save-file", ());
