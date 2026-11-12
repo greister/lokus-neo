@@ -61,22 +61,78 @@ origin and cannot reach the parent DOM, Tauri IPC, app `localStorage`, or
 - `src/contexts/RemoteConfigContext.jsx` — remote config fetch uses an
   `AbortController` with an 8 s timeout and falls back to `DEFAULT_CONFIG`.
 
-### 3. Configuration
+### 3. In-app Siyuan-style workbench (live view)
 
-`src-tauri/tauri.conf.json` and **`src-tauri/tauri.windows.conf.json`** (the
-Windows platform file *overrides* the main one) both relax the CSP; see below.
+`View → Open Workbench` (`Ctrl+Shift+Y`) opens a **second native WebView window**
+that renders a note-taking workbench: six Chinese menu groups, a vertical dock
+(document tree / tags / search / outline / settings), five notebooks, tabs,
+breadcrumbs, Markdown tables and `[[wiki]]` links, an outline/property/tag
+sidebar and a status bar. Light/dark theme, font size and open tabs persist in
+`localStorage`.
 
-Root-relative `/static/...` references in exported reports are rewritten to a
-configurable origin. It defaults to the loopback address
-`http://127.0.0.1:8090` — **no remote host is contacted by default**. Override
-or disable it:
+This is **not** a generated HTML snapshot. `scan_workbench_docs` walks the
+current workspace on every refresh, so new `.md`/`.html` files appear without
+running any `sync` step.
+
+- `src-tauri/src/workbench.rs` — `#[tauri::command] scan_workbench_docs`,
+  `open_workbench_window`, `close_workbench_window`. Reads the workspace from
+  `.settings.dat`, uses `walkdir` / `regex` / `chrono`, extracts H1/tags/outline,
+  and returns a `WorkbenchSnapshot`. HTML files are indexed by `<title>` only;
+  their bodies are loaded lazily. Skips `.git`, `node_modules`, `.lokus`,
+  `reports`, `__pycache__` and the generated preview page.
+- `src/views/Workbench.jsx` + `Workbench.css` + `workbenchModel.js` — the view
+  and its pure, testable helpers (`collectTags`, `groupDocs`, `searchDocs`,
+  `buildTagTree`, `wikiToMarkdown`, …).
+- `src/main.jsx` — the `?view=workbench` window bypasses `AuthProvider`,
+  `AuthGate`, `RemoteConfigProvider`, telemetry and PostHog entirely, so a
+  stalled network probe cannot leave the workbench blank.
+- `src-tauri/src/lib.rs` + `menu.rs` — window registration, menu entry and the
+  same Rust-side close fallback used for Preferences.
+
+The optional `lokus_archive.py` helper path shown in "copy command" dialogs is
+derived from the **current user's home directory** by `default_skills_dir()`;
+no machine-specific path is baked into the source. Override it with
+`localStorage['lokus.wb.skills-dir']`. The workbench never writes to disk —
+those dialogs only produce copyable commands.
+
+HTML reports inside the workbench reuse `read_file_content` +
+`prepareHtmlForPreview()` + a `blob:` iframe (see §1).
+
+### 4. HTML encoding and URL rewriting
+
+Two problems only show up for reports that are HTML *fragments* rather than
+complete documents:
+
+- **UTF-8.** `new Blob([html], { type: 'text/html' })` has no charset, so a
+  zh-CN WebView2 decodes it with the system ANSI code page and turns Chinese
+  text into mojibake. Both HTML channels now use
+  `text/html;charset=utf-8`, and `prepareHtmlForPreview()` injects
+  `<meta charset="utf-8">` when the fragment has no charset declaration
+  (into `<head>` if present, otherwise at the front).
+- **Root-relative URLs.** A `blob:` URL cannot resolve `/static/...` or
+  `/api/...`. `prepareHtmlForPreview()` rewrites both to a configurable
+  dashboard origin. It defaults to the loopback address
+  `http://127.0.0.1:8090` — **no remote host is contacted by default**.
+  Override or disable it:
 
 ```js
 localStorage.setItem('lokus.dashboard-origin', 'http://127.0.0.1:9000');
 localStorage.setItem('lokus.dashboard-origin', ''); // disable rewriting
 ```
 
-The CSP in both `tauri*.conf.json` files must allow whichever origin you pick.
+**Known limitation:** the preview iframe deliberately omits
+`allow-same-origin`, so its origin is opaque (`null`). A rewritten
+`fetch('/api/…')` reaches the dashboard, but the dashboard must return an
+`Access-Control-Allow-Origin` header or the request ends in
+`TypeError: Failed to fetch`. This is a server-side CORS issue, not a rendering
+or encoding bug. Fragments that depend on live dashboard data will show a
+"读取失败" hint; fully self-contained reports render correctly.
+
+### 5. Configuration
+
+`src-tauri/tauri.conf.json` and **`src-tauri/tauri.windows.conf.json`** (the
+Windows platform file *overrides* the main one) both relax the CSP; see below.
+The CSP in both files must allow whichever dashboard origin you pick.
 
 ## ⚠️ Security trade-offs — read before using
 
@@ -120,17 +176,29 @@ embedded frontend — always build through the Tauri CLI.
 Tests:
 
 ```bash
-npx vitest run src/components/HtmlViewer/HtmlViewerTab.test.jsx \
+npx vitest run src/views/Workbench.test.jsx \
+               src/components/HtmlViewer/HtmlViewerTab.test.jsx \
                src/contexts/RemoteConfigContext.test.jsx \
                src/core/auth/AuthGate.test.jsx
+cargo test --manifest-path src-tauri/Cargo.toml workbench::tests
 ```
 
-Verified at the time of this fork: 19/19 tests passing; the preview renders
-inline CSS, cards, tables and CDN-backed candlestick/volume charts identically
-to a standalone browser.
+Verification history on this fork:
+
+- 38/38 frontend tests passing at the time the workbench landed (18
+  `Workbench.test.jsx` + the existing suites).
+- On one later sandbox run `vitest` hung at startup, so the UTF-8 / URL
+  rewriting helper was additionally checked with a direct Node ESM import
+  (8/8 assertions), with `vite build` used to validate the JSX.
+- The final binary was verified on a real WebView2 window: the workbench
+  renders all six menus, the dock, five notebooks, tabs and Markdown; complete
+  HTML reports show their CSS, cards and `+0.7% / +0.8% / +5.7%` metric cards;
+  HTML fragments display Chinese text correctly. See the CORS limitation in
+  §4 for the one remaining data-side restriction.
 
 ## Reverting
 
-Everything in this fork is a single commit on top of `dea4909`. To return to
-stock upstream behaviour, check out the base commit, or re-fork upstream. The
-unmodified upstream `LICENSE`, `README` body and source tree are preserved.
+Everything in this fork sits on top of `dea4909` on branch `neo/custom`.
+To return to stock upstream behaviour, check out the base commit (local
+`main`), or re-fork upstream. The unmodified upstream `LICENSE`, `README`
+body and source tree are preserved.

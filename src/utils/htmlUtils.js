@@ -108,8 +108,13 @@ function injectNonce(html, tagPattern, nonce) {
  *     is blocked — which is why previews showed unstyled, jumbled text.
  *     Copying the host document's nonce onto report tags re-authorises them.
  *  2. Reports exported from a self-hosted dashboard may reference
- *     `/static/...`, which cannot resolve from a `blob:` URL. Optionally
- *     rewrite them to a configurable origin (loopback by default).
+ *     `/static/...` assets or call `/api/...` endpoints. Root-relative URLs
+ *     cannot resolve from a `blob:` URL, so they are rewritten to a
+ *     configurable origin (loopback by default).
+ *  3. A `blob:text/html` served without a charset is decoded with the OS ANSI
+ *     code page (GBK on zh-CN Windows), which mangles UTF-8 Chinese in widget
+ *     fragments that have no `<head>` / `<meta charset>`. Declare UTF-8 inside
+ *     the document as well, so rendering does not depend on the Blob MIME type.
  *
  * The iframe keeps `sandbox` WITHOUT `allow-same-origin`, so these documents
  * still run in an opaque origin and cannot reach the parent DOM or Tauri IPC.
@@ -124,11 +129,24 @@ export function prepareHtmlForPreview(rawHtml, dashboardOrigin = getDashboardOri
   out = injectNonce(out, /<link\b[^>]*>/gi, styleNonce);
   out = injectNonce(out, /<script\b[^>]*>/gi, scriptNonce);
 
+  // Encoding: `<meta charset>` wins over an absent MIME charset. Keep it in
+  // the first 1024 bytes (the HTML encoding-sniffing window) — fragments have
+  // no <head>, so prepend it; full documents get it right after <head>.
+  if (!/<meta\s+[^>]*charset\s*=/i.test(out)) {
+    const meta = '<meta charset="utf-8">';
+    const head = /<head\b[^>]*>/i.exec(out);
+    if (head) {
+      const at = head.index + head[0].length;
+      out = out.slice(0, at) + meta + out.slice(at);
+    } else {
+      out = meta + out;
+    }
+  }
+
   if (dashboardOrigin) {
-    out = out.replace(
-      /(\b(?:src|href)\s*=\s*)(["'])\/static\//gi,
-      `$1$2${dashboardOrigin}/static/`
-    );
+    // Matches src="/static/x", href='/static/x' and JS string literals such as
+    // fetch("/api/macro_calendar?days=21") inside inline report scripts.
+    out = out.replace(/(["'])\/(static|api)\//gi, `$1${dashboardOrigin}/$2/`);
   }
 
   return out;

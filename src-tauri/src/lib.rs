@@ -2,6 +2,8 @@
 mod window_manager;
 #[cfg(desktop)]
 mod menu;
+#[cfg(desktop)]
+mod workbench;
 mod theme;
 mod handlers;
 mod clipboard;
@@ -698,6 +700,12 @@ pub fn run() {
       handlers::files::move_file,
       handlers::files::delete_file,
       handlers::files::reveal_in_finder,
+      #[cfg(desktop)]
+      workbench::scan_workbench_docs,
+      #[cfg(desktop)]
+      workbench::open_workbench_window,
+      #[cfg(desktop)]
+      workbench::close_workbench_window,
       handlers::files::open_terminal,
       handlers::files::read_image_file,
       handlers::files::path_exists,
@@ -1175,13 +1183,13 @@ pub fn run() {
         WindowEvent::CloseRequested { api, .. } => {
           let label = window.label().to_string();
 
-          // Modal windows (preferences) have no dirty editors to flush, but we
-          // still destroy them from Rust instead of relying on Tauri's default
-          // close path. When the WebView2 renderer hangs (offline auth probe,
-          // remote-config fetch, GPU hiccup, ...) the default path can leave the
-          // window alive with a dead X button. A worker-thread destroy() keeps
-          // the close responsive regardless of renderer state.
-          if label == "prefs" {
+          // Modal/auxiliary windows (preferences, workbench) have no dirty
+          // editors to flush, but we still destroy them from Rust instead of
+          // relying on Tauri's default close path. When the WebView2 renderer
+          // hangs (offline auth probe, remote-config fetch, GPU hiccup, ...)
+          // the default path can leave the window alive with a dead X button.
+          // A worker-thread destroy() keeps the close responsive regardless.
+          if label == "prefs" || label == "workbench" {
             api.prevent_close();
             let win = window.clone();
             std::thread::spawn(move || {

@@ -61,6 +61,7 @@ const VIEW_ZOOM_OUT_ID: &str = "view-zoom-out";
 const VIEW_GRAPH_ID: &str = "view-graph";
 const VIEW_KANBAN_ID: &str = "view-kanban";
 const VIEW_COMMAND_PALETTE_ID: &str = "view-command-palette";
+const VIEW_WORKBENCH_ID: &str = "view-workbench";
 const VIEW_THEME_LIGHT_ID: &str = "view-theme-light";
 const VIEW_THEME_DARK_ID: &str = "view-theme-dark";
 const VIEW_THEME_AUTO_ID: &str = "view-theme-auto";
@@ -229,6 +230,9 @@ pub fn init(app: &AppHandle) -> tauri::Result<()> {
       .build(app)?)
     .item(&MenuItemBuilder::with_id(VIEW_COMMAND_PALETTE_ID, "Show Command Palette")
       .accelerator("CmdOrCtrl+K")
+      .build(app)?)
+    .item(&MenuItemBuilder::with_id(VIEW_WORKBENCH_ID, "Open Workbench")
+      .accelerator("CmdOrCtrl+Shift+Y")
       .build(app)?)
     .separator()
     .item(&CheckMenuItemBuilder::with_id(VIEW_THEME_LIGHT_ID, "Light Theme")
@@ -540,6 +544,12 @@ pub fn init(app: &AppHandle) -> tauri::Result<()> {
       }
       VIEW_COMMAND_PALETTE_ID => {
         let _ = emit_focused(app, "lokus:command-palette", ());
+      }
+      // The workbench is an independent live view over the workspace. Open it
+      // from Rust rather than emitting to the focused webview: a hung renderer
+      // must not be able to block the menu action.
+      VIEW_WORKBENCH_ID => {
+        let _ = crate::workbench::open_workbench_window(app.clone());
       }
       // Theme items stay global: every window must follow the active theme.
       VIEW_THEME_LIGHT_ID => {

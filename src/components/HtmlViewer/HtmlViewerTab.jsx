@@ -63,7 +63,7 @@ export default function HtmlViewerTab({ filePath }) {
   useEffect(() => {
     if (!preview || html == null) return undefined;
     const url = URL.createObjectURL(
-      new Blob([prepareHtmlForPreview(html)], { type: 'text/html' })
+      new Blob([prepareHtmlForPreview(html)], { type: 'text/html;charset=utf-8' })
     );
     setBlobUrl(url);
     return () => {

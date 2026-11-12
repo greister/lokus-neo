@@ -118,7 +118,31 @@ describe('prepareHtmlForPreview', () => {
   it('does not double-inject a nonce that is already present', () => {
     addHost('style', 'STYLE123');
     const out = prepareHtmlForPreview('<style nonce="own">a{}</style>');
-    expect(out).toBe('<style nonce="own">a{}</style>');
+    expect(out).toContain('<style nonce="own">a{}</style>');
+    expect(out).not.toContain('nonce="STYLE123"');
+  });
+
+  it('declares UTF-8 for fragments that have no <head> or charset meta', () => {
+    const out = prepareHtmlForPreview('<div class="widget">宏观空间</div>', '');
+    expect(out.startsWith('<meta charset="utf-8">')).toBe(true);
+    expect(out).toContain('<div class="widget">宏观空间</div>');
+  });
+
+  it('injects charset into <head> but never duplicates an existing one', () => {
+    const withHead = prepareHtmlForPreview(
+      '<html><head><title>R</title></head><body>正文</body></html>', '');
+    expect(withHead).toContain('<head><meta charset="utf-8">');
+    const already = prepareHtmlForPreview(
+      '<html><head><meta charset="utf-8"></head><body>正文</body></html>', '');
+    expect(already.match(/charset/gi)).toHaveLength(1);
+  });
+
+  it('rewrites root-relative /api/ calls as well as /static/ assets', () => {
+    const out = prepareHtmlForPreview(
+      '<script>fetch("/api/macro_calendar?days=21")</script>' +
+        '<script src=\'/static/common.js\'></script>');
+    expect(out).toContain(`fetch("${DASHBOARD_ORIGIN}/api/macro_calendar?days=21")`);
+    expect(out).toContain(`src='${DASHBOARD_ORIGIN}/static/common.js'`);
   });
 
   it('rewrites root-relative /static/ assets to the 202 dashboard', () => {
@@ -135,7 +159,9 @@ describe('prepareHtmlForPreview', () => {
     expect(prepareHtmlForPreview(src, 'http://127.0.0.1:9000')).toContain(
       'src="http://127.0.0.1:9000/static/common.js"'
     );
-    expect(prepareHtmlForPreview(src, '')).toBe(src);
+    const untouched = prepareHtmlForPreview(src, '');
+    expect(untouched).toContain('src="/static/common.js"');
+    expect(untouched).not.toContain('127.0.0.1');
   });
 
   it('keeps ordinary inline CSS and body markup intact', () => {

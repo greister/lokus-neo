@@ -6,11 +6,13 @@
 > (2026-08-27). Upstream is licensed **FCL-1.0-MIT** and the original
 > [`LICENSE`](LICENSE) is retained unchanged.
 >
-> This fork adds **in-app HTML report preview** plus a handful of reliability
-> fixes. It is maintained for personal/local use, is **not** affiliated with
-> the Lokus team, and receives no upstream support. See
-> [`FORK-NOTES.md`](FORK-NOTES.md) for the complete change list, build
-> instructions and the **security trade-offs** the preview introduces.
+> This fork adds an **in-app Siyuan-style workbench** (a live, disk-scanning
+> second window opened with `Ctrl+Shift+Y`), **in-app HTML report preview**,
+> plus a handful of reliability fixes. It is maintained for personal/local
+> use, is **not** affiliated with the Lokus team, and receives no upstream
+> support. See [`FORK-NOTES.md`](FORK-NOTES.md) for the complete change list,
+> build instructions, known CORS limitation and the **security trade-offs**
+> the preview introduces.
 >
 > For the official application, downloads and documentation, see
 > <https://github.com/lokus-ai/lokus> and <https://lokusmd.com>.
