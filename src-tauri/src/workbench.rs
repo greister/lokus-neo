@@ -400,11 +400,14 @@ mod tests {
     }
 
     #[test]
-    fn skills_dir_is_user_agnostic() {
+    fn skills_dir_is_derived_from_home() {
         let p = default_skills_dir();
+        // The path is computed at runtime from the current user's home, so no
+        // machine-specific literal needs to live in the source tree. It will
+        // legitimately contain the current user name on this machine.
+        let home = dirs::home_dir().expect("test environment has a home dir");
+        assert!(p.starts_with(&home.to_string_lossy().into_owned()));
         assert!(p.contains("lokus-dual-archive"));
         assert!(p.ends_with("scripts"));
-        assert!(!p.contains("Neo"));
-        assert!(!p.contains("E:\\Lokus"));
     }
 }

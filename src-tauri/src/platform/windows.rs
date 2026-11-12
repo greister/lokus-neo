@@ -246,6 +246,7 @@ impl Default for WindowsPlatform {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::platform::errors::PlatformErrorKind;
     use std::path::PathBuf;
     
     #[test]

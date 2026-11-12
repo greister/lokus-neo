@@ -180,13 +180,20 @@ npx vitest run src/views/Workbench.test.jsx \
                src/components/HtmlViewer/HtmlViewerTab.test.jsx \
                src/contexts/RemoteConfigContext.test.jsx \
                src/core/auth/AuthGate.test.jsx
-cargo test --manifest-path src-tauri/Cargo.toml workbench::tests
+cargo test --manifest-path src-tauri/Cargo.toml --lib workbench::tests
 ```
+
+`src-tauri/src/platform/windows.rs` also carries a one-line test-only import
+fix: upstream's `test_invalid_path_handling` referenced `PlatformErrorKind`
+without importing it, so `cargo test` would not compile at all. Runtime code
+is unaffected.
 
 Verification history on this fork:
 
 - 38/38 frontend tests passing at the time the workbench landed (18
   `Workbench.test.jsx` + the existing suites).
+- 4/4 Rust `workbench::tests` passing (notebook routing, Chinese tag order,
+  date normalisation, home-derived skills directory).
 - On one later sandbox run `vitest` hung at startup, so the UTF-8 / URL
   rewriting helper was additionally checked with a direct Node ESM import
   (8/8 assertions), with `vite build` used to validate the JSX.
