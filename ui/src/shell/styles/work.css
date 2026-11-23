@@ -552,6 +552,18 @@ body:has(.task-card.carried) { cursor: grabbing; }
 .file-body.image img { max-width: 100%; max-height: 100%; object-fit: contain; border-radius: var(--radius-sm); box-shadow: 0 0 0 1px var(--border), 0 8px 30px rgba(0, 0, 0, 0.12); background: #fff; }
 .file-body.pdf { overflow: hidden; }
 .file-body.pdf iframe { width: 100%; height: 100%; border: 0; background: var(--bg-sidebar); }
+
+/* Lokus Neo: HTML report preview (blob iframe, sandboxed). */
+.file-body.html { overflow: hidden; display: flex; flex-direction: column; }
+.html-view { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.html-view-bar { flex: none; display: flex; align-items: center; gap: 6px; height: 34px; padding: 0 20px; border-bottom: 1px solid var(--border); background: var(--bg-sidebar); }
+.html-view-bar button { border: 0; background: transparent; color: var(--fg-2); font-size: var(--text-caption); padding: 3px 10px; border-radius: 5px; cursor: pointer; }
+.html-view-bar button:hover { background: var(--bg-hover); }
+.html-view-bar button.on { background: var(--bg-active); color: var(--fg); font-weight: 600; }
+.html-view-hint { margin-left: auto; color: var(--fg-3); font-size: 10.5px; }
+.html-view iframe { flex: 1; width: 100%; border: 0; background: #fff; }
+.html-view .file-text { flex: 1; overflow: auto; }
+
 .file-table table { border-collapse: collapse; font-size: var(--text-small); min-width: 100%; }
 .file-table th, .file-table td { padding: 7px 14px; border-bottom: 1px solid var(--border); text-align: left; white-space: nowrap; max-width: 420px; overflow: hidden; text-overflow: ellipsis; }
 .file-table th:first-child, .file-table td:first-child { padding-left: 24px; }

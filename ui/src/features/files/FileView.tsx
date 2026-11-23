@@ -1,5 +1,5 @@
 /** @part-of ui.files */
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { runCore, vaultFileUrl } from "../../bridge/core";
 import { Icon } from "../../shell/Icon";
@@ -15,6 +15,126 @@ interface Read {
   text: string;
   lines: number;
   more: boolean;
+}
+
+interface WholeFile {
+  path: string;
+  size: number;
+  mime: string;
+  kind: string;
+  base64: string;
+}
+
+/* ---- Lokus Neo: in-app HTML report preview -------------------------------- */
+
+/** Decodes base64 to a UTF-8 string (the report bytes come whole from `file.read`). */
+function decodeUtf8(base64: string): string {
+  const bin = atob(base64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return new TextDecoder("utf-8").decode(bytes);
+}
+
+/**
+ * Copy the host document's CSP nonce onto inline tags in a report. Under CSP3 a nonce makes
+ * the browser ignore 'unsafe-inline', so a blob iframe would otherwise block all inline
+ * <style> / <script>, killing charts and layout in saved reports.
+ */
+function withNonce(html: string): string {
+  const nonce =
+    document.querySelector('meta[property="csp-nonce"]')?.getAttribute("content") ??
+    document.querySelector("script[nonce]")?.getAttribute("nonce") ??
+    "";
+  if (!nonce) return html;
+  return html.replace(/<(style|script|link)\b([^>]*)>/gi, (_m, tag: string, attrs: string) => {
+    if (/\bnonce\s*=/i.test(attrs)) return `<${tag}${attrs}>`;
+    return `<${tag}${attrs} nonce="${nonce}">`;
+  });
+}
+
+/** Make sure a fragment declares UTF-8, otherwise a zh-CN WebView decodes it as ANSI (mojibake). */
+function ensureCharset(html: string): string {
+  if (/<meta\s+charset\s*=/i.test(html) || /charset\s*=\s*utf-?8/i.test(html)) return html;
+  if (/<head[^>]*>/i.test(html)) return html.replace(/<head([^>]*)>/i, '<head$1><meta charset="utf-8">');
+  return `<meta charset="utf-8">${html}`;
+}
+
+/**
+ * Root-relative URLs (/static/..., /api/...) cannot resolve inside a blob: iframe. Point them
+ * at a loopback dashboard when one is running; empty string disables rewriting.
+ */
+function rewriteUrls(html: string, origin: string): string {
+  if (!origin) return html;
+  const base = origin.replace(/\/$/, "");
+  return html.replace(/(["'(])(\/(?:static|api|assets)\/[^"')]*)/g, (_m, q: string, p: string) => `${q}${base}${p}`);
+}
+
+function HtmlView({ path }: { path: string }) {
+  const [html, setHtml] = useState<string | null>(null);
+  const [mode, setMode] = useState<"preview" | "source">(() => {
+    try {
+      return localStorage.getItem("lokus.html.mode") === "source" ? "source" : "preview";
+    } catch {
+      return "preview";
+    }
+  });
+  const [problem, setProblem] = useState("");
+  const [origin] = useState(() => {
+    try {
+      return localStorage.getItem("lokus.dashboard-origin") ?? "http://127.0.0.1:8090";
+    } catch {
+      return "http://127.0.0.1:8090";
+    }
+  });
+
+  useEffect(() => {
+    let live = true;
+    runCore<WholeFile>("file.read", { path }).then(
+      (f) => {
+        if (!live) return;
+        const raw = decodeUtf8(f.base64);
+        setHtml(ensureCharset(rewriteUrls(withNonce(raw), origin)));
+      },
+      (e) => {
+        if (live) setProblem(e instanceof Error ? e.message : String(e));
+      },
+    );
+    return () => {
+      live = false;
+    };
+  }, [path, origin]);
+
+  const switchMode = useCallback((next: "preview" | "source") => {
+    setMode(next);
+    try {
+      localStorage.setItem("lokus.html.mode", next);
+    } catch {
+      /* storage disabled */
+    }
+  }, []);
+
+  const srcDoc = useMemo(() => html ?? "", [html]);
+  if (problem) return <p className="file-note">This report could not be read: {problem}</p>;
+  if (html === null) return null;
+
+  return (
+    <div className="html-view">
+      <div className="html-view-bar">
+        <button className={mode === "preview" ? "on" : ""} onClick={() => switchMode("preview")}>
+          预览
+        </button>
+        <button className={mode === "source" ? "on" : ""} onClick={() => switchMode("source")}>
+          源码
+        </button>
+        <span className="html-view-hint">本地报告 · 仅在沙箱内渲染</span>
+      </div>
+      {mode === "preview" ? (
+        <iframe title={fileName(path)} sandbox="allow-scripts allow-forms allow-popups allow-modals" srcDoc={srcDoc} />
+      ) : (
+        <pre className="file-text">{html}</pre>
+      )}
+    </div>
+  );
 }
 
 function Table({ path }: { path: string }) {
@@ -98,6 +218,7 @@ export function FileView({ path }: { path: string }) {
       <div className={`file-body ${kind}`}>
         {kind === "image" && <img src={url} alt={fileName(path)} />}
         {kind === "pdf" && <iframe src={url} title={fileName(path)} />}
+        {kind === "html" && <HtmlView path={path} />}
         {kind === "table" && <Table path={path} />}
         {kind === "text" && <Text path={path} />}
         {kind === "other" && <p className="file-note">Lokus cannot show this kind of file. It is in your workspace folder and opens in its own app.</p>}

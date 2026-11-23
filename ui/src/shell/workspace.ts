@@ -56,7 +56,7 @@ export interface AppState {
   palette: "commands" | "notes" | "search" | "headings" | "templates" | "trash" | "history" | null;
   /** What the main area shows. */
   /** Which tab is showing: a note, or the graph (which sits in `tabs` as `GRAPH_TAB`). */
-  view: "note" | "graph" | "file";
+  view: "note" | "graph" | "file" | "workbench";
   /** The file showing when `view` is "file": a picture, a PDF, a CSV. It sits in `tabs` by its path. */
   file: string | null;
   /** The settings dialog, and which of its pages is showing; null when it is closed. */

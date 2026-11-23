@@ -14,6 +14,7 @@ import { FileView } from "../features/files/FileView";
 import { PluginView } from "../features/plugins/PluginView";
 import { isPicture, PageHeader } from "../features/page-header/PageHeader";
 import { SearchPalette } from "../features/search/SearchPalette";
+import { Workbench } from "../features/workbench/Workbench";
 import { Boundary } from "./Boundary";
 import { formatKeys, runCommand } from "./commands";
 import { Icon } from "./Icon";
@@ -600,6 +601,11 @@ function Workspace() {
         {view === "file" && file && (
           <Boundary name="This file">
             <FileView key={file} path={file} />
+          </Boundary>
+        )}
+        {view === "workbench" && (
+          <Boundary name="The workbench">
+            <Workbench />
           </Boundary>
         )}
         {!active && view === "note" && <Start />}

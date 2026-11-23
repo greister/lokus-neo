@@ -79,6 +79,12 @@ export function registerAllCommands(): void {
       keys: "Mod-g",
       run: () => (app.get().view === "graph" ? closeGraph() : showGraph()),
     },
+    {
+      id: "workbench.toggle",
+      title: "Show or hide the Siyuan-style workbench",
+      keys: "Mod-Shift-y",
+      run: () => app.set((s) => ({ view: s.view === "workbench" ? "note" : "workbench" })),
+    },
     { id: "tab.next", title: "Next tab", keys: isMac ? "Ctrl-Tab" : "Mod-Tab", run: () => stepTab(1) },
     { id: "tab.previous", title: "Previous tab", keys: isMac ? "Ctrl-Shift-Tab" : "Mod-Shift-Tab", run: () => stepTab(-1) },
     {

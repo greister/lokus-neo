@@ -1,14 +1,16 @@
 /** @part-of ui.files */
 
-export type FileKind = "image" | "pdf" | "table" | "text" | "other";
+export type FileKind = "image" | "pdf" | "html" | "table" | "text" | "other";
 
 /** What a file is to a person, by its ending. The same split the core makes. */
 export function kindOf(path: string): FileKind {
   const ext = path.split(".").pop()?.toLowerCase() ?? "";
   if (["png", "jpg", "jpeg", "gif", "webp", "svg", "avif", "bmp"].includes(ext)) return "image";
   if (ext === "pdf") return "pdf";
+  // Lokus Neo: rendered reports get their own kind so they open as a web page, not raw text.
+  if (ext === "html" || ext === "htm") return "html";
   if (ext === "csv" || ext === "tsv") return "table";
-  if (["txt", "log", "json", "html", "htm", "xml", "yaml", "yml", "toml"].includes(ext)) return "text";
+  if (["txt", "log", "json", "xml", "yaml", "yml", "toml"].includes(ext)) return "text";
   return "other";
 }
 
