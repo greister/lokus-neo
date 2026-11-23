@@ -1,0 +1,339 @@
+/** @part-of ui.editor */
+import { closeBrackets, closeBracketsKeymap } from "@codemirror/autocomplete";
+import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
+import { markdown, markdownKeymap, markdownLanguage } from "@codemirror/lang-markdown";
+import { yamlFrontmatter } from "@codemirror/lang-yaml";
+import { indentUnit } from "@codemirror/language";
+import { EditorState, type Extension, Prec, type TransactionSpec } from "@codemirror/state";
+import { drawSelection, EditorView, keymap, placeholder, ViewPlugin } from "@codemirror/view";
+import { yCollab, yUndoManagerKeymap } from "y-codemirror.next";
+import type { Awareness } from "y-protocols/awareness";
+import { type Text as YText, UndoManager } from "yjs";
+
+import { registerCommands, runCommand } from "../shell/commands";
+import { showContextMenu } from "../shell/contextMenu";
+import { differing, livePreview, reshapeTable, tableActions, tableMenuItems, type TableTarget } from "./livePreview";
+import { insertLink, readFrontmatter, setFrontmatterKey, setHeading, toggleMark } from "./markdownCommands";
+import { markdownPairs, typeText } from "./pairs";
+import { completions } from "./slash";
+import { editorTheme } from "./theme";
+
+export interface EditorHooks {
+  onChange(text: string): void;
+  onOpenLink(target: string, newTab?: boolean): void;
+  /** Turn an image path from a note into something the window can load. */
+  resolveImage(src: string): string | null;
+  /** Text of the note a link points at, for `![[embeds]]`. */
+  loadNote(target: string): Promise<string | null>;
+  /** Paths of every note, for `[[` suggestions. */
+  notePaths(): string[];
+  /** Keep a pasted or dropped file in the vault; resolves to the link target to insert, or null. */
+  saveFile(file: File): Promise<string | null>;
+  /** Extra slash-menu entries, from plugins. */
+  snippets(): { label: string; detail: string; insert: string }[];
+  /** The visible note's identity; clipboard focus is deliberately separate. */
+  menuContext(): { path: string; valid(): boolean; subscribe(check: () => void): () => void } | null;
+}
+
+/** One editing surface. Each open note keeps its own state (and undo history). */
+function readOnlyView(parent: HTMLElement, text: string, hooks: Pick<EditorHooks, "onOpenLink" | "resolveImage">): EditorView {
+  return new EditorView({
+    parent,
+    state: EditorState.create({
+      doc: text,
+      extensions: [
+        EditorView.lineWrapping,
+        EditorState.readOnly.of(true),
+        EditorView.editable.of(false),
+        yamlFrontmatter({ content: markdown({ base: markdownLanguage, addKeymap: false }) }),
+        livePreview({
+          openLink: (target, newTab) => hooks.onOpenLink(target, newTab),
+          resolveImage: (src) => hooks.resolveImage(src),
+        }),
+        editorTheme,
+      ],
+    }),
+  });
+}
+
+/**
+ * Show some markdown read-only, rendered like a note, with no note open and no editor needed.
+ * An assistant's answer is drawn with this. Returns how to remove it.
+ */
+export function previewMarkdown(parent: HTMLElement, text: string, hooks: Pick<EditorHooks, "onOpenLink" | "resolveImage">): () => void {
+  const view = readOnlyView(parent, text, hooks);
+  return () => view.destroy();
+}
+
+export class Editor {
+  readonly view: EditorView;
+  private hooks: EditorHooks;
+  private menuChecks = new Set<() => void>();
+  private closeMenu?: () => void;
+
+  constructor(parent: HTMLElement, hooks: EditorHooks) {
+    this.hooks = hooks;
+    this.view = new EditorView({ parent, state: this.createState("") });
+    registerCommands(tableActions.map(({ id, label }) => ({
+      id,
+      title: label,
+      hidden: true,
+      run: (args: Record<string, unknown>) => {
+        const context = this.hooks.menuContext();
+        if (!context?.valid() || args.path !== context.path || !this.canEdit()) return { applied: false };
+        const applied = reshapeTable(this.view, id, args);
+        if (applied) this.view.focus();
+        return { applied };
+      },
+    })));
+  }
+
+  private canEdit(): boolean {
+    const { view } = this;
+    return view.dom.isConnected && view.dom.getClientRects().length > 0 && !view.dom.closest("[inert]") &&
+      !view.state.readOnly && view.state.facet(EditorView.editable);
+  }
+
+  private tableMenu(cell: HTMLElement, target: TableTarget, at: { x: number; y: number }): void {
+    const context = this.hooks.menuContext();
+    if (!context?.valid() || !this.canEdit()) return;
+    const { view } = this;
+    const state = view.state;
+    const valid = () => context.valid() && this.canEdit() && cell.isConnected && view.dom.contains(cell) &&
+      view.state.doc === state.doc && view.state.selection.eq(state.selection);
+    const selection = getSelection();
+    const offset = (node: Node, end: number) => {
+      const range = document.createRange();
+      range.selectNodeContents(cell);
+      range.setEnd(node, end);
+      return range.toString().length;
+    };
+    const selected = document.activeElement === cell && selection?.anchorNode && selection.focusNode &&
+      cell.contains(selection.anchorNode) && cell.contains(selection.focusNode)
+      ? [offset(selection.anchorNode, selection.anchorOffset), offset(selection.focusNode, selection.focusOffset)] : null;
+    const items = tableMenuItems(target);
+    const firstDelete = items.find((item) => item.danger);
+    this.closeMenu = showContextMenu(at, "Table", items.flatMap((item) => item === firstDelete ? [null, item] : [item]), {
+      valid,
+      subscribe: (check) => {
+        cell.classList.add("cm-context-target");
+        this.menuChecks.add(check);
+        const unsubscribe = context.subscribe(check);
+        return () => { cell.classList.remove("cm-context-target"); this.menuChecks.delete(check); unsubscribe(); };
+      },
+      restoreFocus: () => {
+        cell.focus({ preventScroll: true });
+        const text = cell.firstChild;
+        if (selected && text?.nodeType === Node.TEXT_NODE) {
+          const length = text.textContent?.length ?? 0;
+          getSelection()?.setBaseAndExtent(text, Math.min(selected[0], length), text, Math.min(selected[1], length));
+        }
+      },
+      run: (id) => { if (valid()) void runCommand(id, { path: context.path, ...target }); },
+    });
+  }
+
+  createState(text: string): EditorState {
+    return this.build(text, [history(), keymap.of(historyKeymap)]);
+  }
+
+  /** A state bound to a shared document: edits, undo and cursors go through it. */
+  createSharedState(text: YText, awareness: Awareness): EditorState {
+    const undoManager = new UndoManager(text);
+    return this.build(text.toString(), [yCollab(text, awareness, { undoManager }), keymap.of(yUndoManagerKeymap)]);
+  }
+
+  private build(text: string, editing: Extension[]): EditorState {
+    const apply = (spec: (state: EditorState) => TransactionSpec) => (view: EditorView) => {
+      view.dispatch(spec(view.state));
+      return true;
+    };
+    // The cursor starts in the body, so the properties block opens folded away.
+    const start = Math.min(readFrontmatter(text.slice(0, 20_000)).end, text.length);
+    return EditorState.create({
+      doc: text,
+      selection: { anchor: start },
+      extensions: [
+        editing,
+        drawSelection(),
+        EditorView.lineWrapping,
+        indentUnit.of("    "),
+        EditorState.tabSize.of(4),
+        markdownPairs,
+        closeBrackets(),
+        completions(() => this.hooks.notePaths(), () => this.hooks.snippets()),
+        yamlFrontmatter({ content: markdown({ base: markdownLanguage, addKeymap: false }) }),
+        livePreview({
+          openLink: (target, newTab) => this.hooks.onOpenLink(target, newTab),
+          resolveImage: (src) => this.hooks.resolveImage(src),
+          loadNote: (target) => this.hooks.loadNote(target),
+          mountEmbed: (parent, text) => this.mountEmbed(parent, text),
+          tableMenu: (cell, target, at) => this.tableMenu(cell, target, at),
+        }),
+        ViewPlugin.define(() => ({
+          update: () => this.menuChecks.forEach((check) => check()),
+          destroy: () => this.closeMenu?.(),
+        })),
+        editorTheme,
+        placeholder("Write something, or press / for commands…"),
+        Prec.high(
+          keymap.of([
+            { key: "Mod-b", run: apply((s) => toggleMark(s, "**")) },
+            { key: "Mod-i", run: apply((s) => toggleMark(s, "*")) },
+            { key: "Mod-e", run: apply((s) => toggleMark(s, "`")) },
+            { key: "Mod-Shift-x", run: apply((s) => toggleMark(s, "~~")) },
+            { key: "Mod-Shift-h", run: apply((s) => toggleMark(s, "==")) },
+            { key: "Mod-k", run: apply(insertLink) },
+          ]),
+        ),
+        keymap.of([...markdownKeymap, ...closeBracketsKeymap, ...defaultKeymap, indentWithTab]),
+        EditorView.domEventHandlers({
+          paste: (e, view) => this.takeFiles(view, e.clipboardData?.files, null, e),
+          drop: (e, view) => this.takeFiles(view, e.dataTransfer?.files, view.posAtCoords({ x: e.clientX, y: e.clientY }), e),
+        }),
+        EditorView.updateListener.of((u) => {
+          if (u.docChanged) this.hooks.onChange(u.state.doc.toString());
+        }),
+      ],
+    });
+  }
+
+  /** A read-only preview of some markdown; embeds inside it are not expanded again. */
+  private mountEmbed(parent: HTMLElement, text: string): EditorView {
+    return readOnlyView(parent, text, this.hooks);
+  }
+
+  /** Show some markdown read-only, rendered like a note. Returns how to remove it. */
+  preview(parent: HTMLElement, text: string): () => void {
+    return previewMarkdown(parent, text, this.hooks);
+  }
+
+  /** Pasted or dropped files are saved into the vault and linked where they landed. */
+  private takeFiles(view: EditorView, files: FileList | undefined, at: number | null, event: Event): boolean {
+    if (!files?.length || view.state.readOnly) return false;
+    event.preventDefault();
+    void (async () => {
+      for (const file of [...files]) {
+        const target = await this.hooks.saveFile(file);
+        if (!target) continue;
+        const link = `${file.type.startsWith("image/") ? "!" : ""}[${file.type.startsWith("image/") ? "" : file.name}](${target})`;
+        const pos = Math.min(at ?? view.state.selection.main.head, view.state.doc.length);
+        const line = view.state.doc.lineAt(pos);
+        // An image gets a line of its own.
+        const insert = file.type.startsWith("image/") ? `${view.state.sliceDoc(line.from, pos).trim() ? "\n" : ""}${link}\n` : link;
+        const end = at === null ? view.state.selection.main.to : pos;
+        view.dispatch({ changes: { from: pos, to: end, insert }, selection: { anchor: pos + insert.length }, userEvent: "input.paste" });
+        at = at === null ? null : pos + insert.length;
+      }
+    })();
+    return true;
+  }
+
+  /** Every heading in the note, in order. */
+  headings(): { level: number; text: string; pos: number }[] {
+    const out: { level: number; text: string; pos: number }[] = [];
+    const doc = this.view.state.doc;
+    let fenced = false;
+    for (let n = 1; n <= doc.lines; n++) {
+      const line = doc.line(n);
+      if (/^(```|~~~)/.test(line.text)) fenced = !fenced;
+      const m = fenced ? null : /^(#{1,6})\s+(.*?)\s*#*$/.exec(line.text);
+      if (m) out.push({ level: m[1].length, text: m[2], pos: line.from });
+    }
+    return out;
+  }
+
+  /** Move to a place in the note and bring it into view near the top. */
+  goTo(pos: number): void {
+    const at = Math.min(pos, this.view.state.doc.length);
+    const end = this.view.state.doc.lineAt(at).to;
+    this.view.dispatch({ selection: { anchor: end }, effects: EditorView.scrollIntoView(at, { y: "start", yMargin: 96 }) });
+    this.view.focus();
+  }
+
+  /** Go to what a link points at inside this note: `#Heading` or `^block`. */
+  reveal(ref: string): boolean {
+    if (ref.startsWith("^")) {
+      const at = this.text.indexOf(ref);
+      if (at < 0) return false;
+      this.goTo(at);
+      return true;
+    }
+    const want = ref.replace(/^#/, "").trim().toLowerCase();
+    const found = this.headings().find((h) => h.text.toLowerCase() === want);
+    if (found) this.goTo(found.pos);
+    return Boolean(found);
+  }
+
+  /** Put text where the cursor is, replacing any selection. */
+  insert(text: string): void {
+    this.view.dispatch(this.view.state.replaceSelection(text));
+    this.view.focus();
+  }
+
+  get text(): string {
+    return this.view.state.doc.toString();
+  }
+
+  /** The text the person has selected, or an empty string. */
+  get selection(): string {
+    const { from, to } = this.view.state.selection.main;
+    return this.view.state.sliceDoc(from, to);
+  }
+
+  /** Swap in another note's state; returns the state being replaced. */
+  swap(next: EditorState): EditorState {
+    const previous = this.view.state;
+    try {
+      this.view.setState(next);
+    } catch (e) {
+      // A note that cannot be drawn leaves the one on screen as it was. Left half switched, the
+      // note on screen was saved with the other note's text.
+      this.view.setState(previous);
+      throw e;
+    }
+    return previous;
+  }
+
+  /** A note's state with the text the note has now, for a tab that was behind another while a teammate typed. */
+  caughtUp(state: EditorState, text: string): EditorState {
+    const had = state.doc.toString();
+    return had === text ? state : state.update({ changes: differing(had, text) }).state;
+  }
+
+  /**
+   * Take the text after an outside change. Only the part that differs is replaced, so the cursor,
+   * and a table cell being typed in, stay where they are.
+   */
+  replaceText(text: string): void {
+    if (text !== this.text) this.view.dispatch({ changes: differing(this.text, text) });
+  }
+
+  mark(mark: string): void {
+    this.view.dispatch(toggleMark(this.view.state, mark));
+  }
+  heading(level: number): void {
+    this.view.dispatch(setHeading(this.view.state, level));
+  }
+  link(): void {
+    this.view.dispatch(insertLink(this.view.state));
+  }
+  setProperty(key: string, value: string | string[] | null): void {
+    this.view.dispatch(setFrontmatterKey(this.view.state, key, value));
+  }
+  properties(): Record<string, string> {
+    return readFrontmatter(this.view.state.sliceDoc(0, 20_000)).values;
+  }
+  type(text: string): void {
+    typeText(this.view, text);
+  }
+  select(anchor: number, head = anchor): void {
+    const max = this.view.state.doc.length;
+    this.view.dispatch({ selection: { anchor: Math.min(anchor, max), head: Math.min(head, max) } });
+  }
+
+  /** What is actually on screen, line by line, with hidden syntax left out. */
+  rendered(): string[] {
+    return [...this.view.contentDOM.querySelectorAll<HTMLElement>(".cm-line")].map((l) => l.innerText);
+  }
+}

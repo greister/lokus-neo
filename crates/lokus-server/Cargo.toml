@@ -1,0 +1,27 @@
+[package]
+name = "lokus-server"
+description = "The Lokus relay: workspaces, roles and the shared update log."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+axum = { version = "0.8", features = ["ws"] }
+base64.workspace = true
+blake3 = "1"
+futures-util.workspace = true
+jsonwebtoken = { version = "10", default-features = false, features = ["rust_crypto"] }
+reqwest = { version = "0.13", default-features = false, features = ["rustls", "json"] }
+rusqlite.workspace = true
+semver = "1"
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+uuid.workspace = true
+yrs.workspace = true
+
+[dev-dependencies]
+tempfile = "3"
+tokio-tungstenite = "0.28"

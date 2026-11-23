@@ -1,0 +1,488 @@
+/** @part-of ui.connections */
+import { track } from "../../bridge/analytics";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+
+import { type AiConfig, aiConnectors, type AiSettings, aiSettings, checkMcp, type Connector, type McpServer, mcpLogin, mcpLogout, saveAiConfig, saveMcpToken, setAiSecret } from "../../bridge/ai";
+import { openWeb } from "../../bridge/updates";
+import { Icon } from "../../shell/Icon";
+import { useStore } from "../../shell/store";
+import { app, notify } from "../../shell/workspace";
+import { WorkspaceKeys } from "../customers/DataDoor";
+import { Toggle } from "../settings/parts";
+import { Logo } from "./logos";
+
+const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
+
+interface Offered {
+  name: string;
+  description: string;
+  asks: boolean;
+}
+
+export function TokenConnection({ connector, root, from = "settings", onCancel, onConnected }: {
+  connector: Connector;
+  /** The workspace the connection is for. */
+  root: string;
+  from?: "settings" | "setup";
+  onCancel(): void;
+  onConnected(server: McpServer, tools: Offered[]): void;
+}) {
+  const [token, setToken] = useState("");
+  const [phase, setPhase] = useState<"idle" | "checking" | "saving">("idle");
+  const [error, setError] = useState<string | null>(null);
+  const active = useRef(true);
+  const cancelButton = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    active.current = true;
+    return () => { active.current = false; };
+  }, []);
+  useEffect(() => {
+    if (phase === "checking") cancelButton.current?.focus();
+  }, [phase]);
+  const cancel = useCallback(() => {
+    if (phase === "saving") return;
+    active.current = false;
+    setToken("");
+    onCancel();
+  }, [phase, onCancel]);
+  useEffect(() => {
+    const key = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      cancel();
+    };
+    window.addEventListener("keydown", key, true);
+    return () => window.removeEventListener("keydown", key, true);
+  }, [cancel]);
+  const submit = async () => {
+    if (!token.trim() || phase !== "idle") return;
+    setPhase("checking");
+    setError(null);
+    const server = { name: connector.id, url: connector.url, enabled: true };
+    let saving = false;
+    try {
+      const offered = await checkMcp(root, server, token);
+      if (!active.current) return;
+      saving = true;
+      setPhase("saving");
+      await saveMcpToken(root, server, token);
+      if (!active.current) return;
+      setToken("");
+      track("connection_added", { service: connector.id, from });
+      onConnected(server, offered);
+    } catch (e) {
+      if (!active.current) return;
+      track("connection_failed", { service: connector.id, from });
+      setError(saving ? "Could not save the connection on this device. Try again." : message(e));
+      setPhase("idle");
+    }
+  };
+  return (
+    <div className="conn">
+      <form className="conn-list" onSubmit={(e) => { e.preventDefault(); void submit(); }}>
+        <div className="conn-line">
+          <Logo id={connector.id} name={connector.name} />
+          <div className="conn-main"><strong>Connect {connector.name}</strong><small>{connector.about}</small></div>
+        </div>
+        <div className="conn-own">
+          <label htmlFor="connection-token">Personal access token</label>
+          <input id="connection-token" type="password" autoFocus autoComplete="off" spellCheck={false} value={token} disabled={phase !== "idle"} onChange={(e) => setToken(e.target.value)} />
+          <button className="settings-button" disabled={!token.trim() || phase !== "idle"} type="submit">{phase === "checking" ? "Checking…" : phase === "saving" ? "Saving…" : "Connect"}</button>
+          <button ref={cancelButton} className="link" type="button" disabled={phase === "saving"} onClick={cancel}>Cancel</button>
+        </div>
+        <div className="conn-detail">
+          <button className="link" type="button" onClick={() => openWeb(connector.token_url!)}>Create a token</button>
+          <p>Only the repositories and permissions you choose · Saved in your device’s keychain</p>
+          {error && <p className="settings-hint error" role="alert">{error}</p>}
+        </div>
+      </form>
+    </div>
+  );
+}
+
+/**
+ * Settings, Connections: the services the assistant can reach. Pick one by name and sign in;
+ * nobody needs to know an address. A server that is not in the list can still be added by hand.
+ */
+export function Connections() {
+  const [settings, setSettings] = useState<AiSettings | null>(null);
+  const [catalog, setCatalog] = useState<Connector[]>([]);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [tools, setTools] = useState<Record<string, Offered[] | string>>({});
+  const [open, setOpen] = useState<string | null>(null);
+  const [note, setNote] = useState<string | null>(null);
+  const [query, setQuery] = useState("");
+  const [kind, setKind] = useState("");
+  const [own, setOwn] = useState({ name: "", url: "", token: "" });
+  const [adding, setAdding] = useState(false);
+  const [api, setApi] = useState({ name: "", url: "", key: "", about: "" });
+  const [addingApi, setAddingApi] = useState(false);
+  const [tokenConnection, setTokenConnection] = useState<Connector | null>(null);
+
+  const reload = useCallback(() => aiSettings().then(setSettings, (e) => setNote(message(e))), []);
+  // Another workspace has its own connections: start again from what it has.
+  const at = useStore(app, (s) => s.vault?.root ?? "");
+  useEffect(() => {
+    setSettings(null);
+    setTools({});
+    setOpen(null);
+    setTokenConnection(null);
+    void reload();
+  }, [reload, at]);
+  useEffect(() => void aiConnectors().then(setCatalog, () => {}), []);
+  const kinds = useMemo(() => [...new Set(catalog.map((c) => c.kind))], [catalog]);
+  if (!settings || settings.config.root !== at) return <p className="settings-hint">{note ?? "Loading…"}</p>;
+
+  const { config } = settings;
+  const root = config.root;
+  const save = async (patch: Partial<AiConfig>) => {
+    const next = { ...config, ...patch };
+    setSettings({ ...settings, config: next });
+    await saveAiConfig(next).catch((e) => setNote(message(e)));
+  };
+  const added = (name: string) => config.mcp.find((s) => s.name === name);
+  const signedIn = (name: string) => settings.signed_in.includes(name) || settings.tokens.includes(name);
+
+  /** Ask a connected service what it offers, which also proves the connection works. */
+  const look = async (server: McpServer) => {
+    setTools((t) => ({ ...t, [server.name]: "Checking…" }));
+    const found = await checkMcp(root, server).then(
+      (list) => list as Offered[],
+      (e) => message(e),
+    );
+    setTools((t) => ({ ...t, [server.name]: found }));
+  };
+  const connect = async (c: Connector) => {
+    setNote(null);
+    if (c.token_url) {
+      setTokenConnection(c);
+      return;
+    }
+    setBusy(c.id);
+    const server = { name: c.id, url: c.url, enabled: true };
+    try {
+      await mcpLogin(root, server);
+      track("connection_added", { service: c.id, from: "settings" });
+      await reload();
+      notify(`${c.name} is connected`);
+      setOpen(c.id);
+      void look(server);
+    } catch (e) {
+      track("connection_failed", { service: c.id, from: "settings" });
+      setNote(`${c.name}: ${message(e)}`);
+    }
+    setBusy(null);
+  };
+  const disconnect = async (name: string) => {
+    setNote(null);
+    try {
+      await mcpLogout(root, name);
+      await setAiSecret("mcp", name, "", root);
+      await saveAiConfig({ ...config, mcp: config.mcp.filter((s) => s.name !== name) });
+      setTools((t) => { const next = { ...t }; delete next[name]; return next; });
+    } catch {
+      setNote("Could not finish disconnecting. Try again.");
+    }
+    await reload();
+  };
+  const apis = config.apis ?? [];
+  const addApi = async () => {
+    const name = api.name.trim().toLowerCase().replace(/\s+/g, "-");
+    const url = api.url.trim().replace(/\/+$/, "");
+    if (!/^[a-z0-9-]+$/.test(name) || !/^https:\/\/|^http:\/\/(localhost|127\.0\.0\.1)/.test(url) || apis.some((a) => a.name === name)) {
+      setNote("It needs a short name that is not taken (letters, digits and dashes) and an address starting with https://.");
+      return;
+    }
+    if (api.key.trim()) await setAiSecret("api", name, api.key, root).catch((e) => setNote(message(e)));
+    await save({ apis: [...apis, { name, url, about: api.about.trim(), enabled: true }] });
+    track("connection_added", { service: "own_api", from: "settings" });
+    setApi({ name: "", url: "", key: "", about: "" });
+    setAddingApi(false);
+    await reload();
+  };
+  const removeApi = async (name: string) => {
+    await setAiSecret("api", name, "", root).catch(() => {});
+    await save({ apis: apis.filter((a) => a.name !== name) });
+    await reload();
+  };
+  const addOwn = async () => {
+    const name = own.name.trim().toLowerCase().replace(/\s+/g, "-");
+    const url = own.url.trim();
+    if (!/^[a-z0-9-]+$/.test(name) || !/^https?:\/\//.test(url) || added(name) || catalog.some((c) => c.id === name)) {
+      setNote("A server needs a short name that is not taken (letters, digits and dashes) and an http(s) address.");
+      return;
+    }
+    if (own.token.trim()) await setAiSecret("mcp", name, own.token, root).catch((e) => setNote(message(e)));
+    await save({ mcp: [...config.mcp, { name, url, enabled: true }] });
+    setOwn({ name: "", url: "", token: "" });
+    setAdding(false);
+    await reload();
+  };
+
+  const q = query.trim().toLowerCase();
+  const shown = (c: Connector) => (!kind || c.kind === kind) && (!q || `${c.name} ${c.kind} ${c.about}`.toLowerCase().includes(q));
+  const known = new Set(catalog.map((c) => c.id));
+  const connected = catalog.filter((c) => added(c.id));
+  const others = [...config.mcp.filter((s) => !known.has(s.name)), ...settings.plugin_servers.map((s) => ({ ...s, plugin: true }))];
+  const available = catalog.filter((c) => !added(c.id) && c.ready === "yes" && shown(c));
+  const waiting = catalog.filter((c) => c.ready !== "yes" && shown(c));
+
+  /** One service that is connected: its state, a switch, and what it offers when opened. */
+  const linked = (server: McpServer, id: string, name: string, about: string, plugin = false) => {
+    const offered = tools[server.name];
+    const isOpen = open === server.name;
+    const needsSignIn = !plugin && !signedIn(server.name);
+    const connector = catalog.find((c) => c.id === id);
+    return (
+      <div key={server.name} className={`conn-row linked${isOpen ? " open" : ""}`}>
+        <div className="conn-line">
+          <Logo id={id} name={name} />
+          <button
+            className="conn-main"
+            onClick={() => {
+              setOpen(isOpen ? null : server.name);
+              if (!isOpen && !Array.isArray(offered)) void look(server);
+            }}
+          >
+            <strong>{name}</strong>
+            <small>
+              {needsSignIn ? (
+                <span className="conn-state off">Not signed in</span>
+              ) : (
+                <span className={`conn-state${server.enabled ? "" : " off"}`}>{server.enabled ? "Connected" : "Switched off"}</span>
+              )}
+              {Array.isArray(offered) ? `${offered.length} tools` : about}
+            </small>
+          </button>
+          {needsSignIn && (
+            <button className="settings-button" onClick={() => connector?.token_url ? setTokenConnection(connector) : void mcpLogin(root, server).then(reload, (e) => setNote(message(e)))}>
+              {connector?.token_url ? "Connect" : "Sign in"}
+            </button>
+          )}
+          {!plugin && <Toggle on={server.enabled} label={`Let the assistant use ${name}`} onChange={(enabled) => void save({ mcp: config.mcp.map((m) => (m.name === server.name ? { ...m, enabled } : m)) })} />}
+          <button className={`conn-chevron${isOpen ? " down" : ""}`} aria-label={`What ${name} offers`} onClick={() => setOpen(isOpen ? null : server.name)}>
+            <Icon name="chevron" size={14} />
+          </button>
+        </div>
+        {isOpen && (
+          <div className="conn-detail">
+            {typeof offered === "string" && <p>{offered}</p>}
+            {Array.isArray(offered) && offered.length === 0 && <p>This service offers no tools.</p>}
+            {Array.isArray(offered) && offered.length > 0 && (
+              <ul>
+                {offered.map((t) => (
+                  <li key={t.name} title={t.description}>
+                    <code>{t.name}</code>
+                    <span>{t.description}</span>
+                    <em>{t.asks ? "Asks first" : "Reads only"}</em>
+                  </li>
+                ))}
+              </ul>
+            )}
+            {!plugin && (
+              <div className="conn-detail-foot">
+                {connector?.token_url && <button className="link" onClick={() => setTokenConnection(connector)}>Update token</button>}
+                <button className="link" onClick={() => void look(server)}>
+                  Check again
+                </button>
+                <button className="link danger" onClick={() => void disconnect(server.name)}>
+                  Disconnect
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  if (tokenConnection) return (
+    <TokenConnection
+      root={root}
+      connector={tokenConnection}
+      onCancel={() => setTokenConnection(null)}
+      onConnected={(server, offered) => {
+        setTokenConnection(null);
+        setTools((t) => ({ ...t, [server.name]: offered }));
+        setOpen(server.name);
+        void reload();
+        notify(`${tokenConnection.name} is connected`);
+      }}
+    />
+  );
+
+  return (
+    <div className="conn">
+      <header className="conn-head">
+        <div>
+          <h2>{settings.workspace ? `Connections in ${settings.workspace}` : "Connections"}</h2>
+          <p>Let the assistant look things up and act in the tools you already use. It works when you ask, and asks before it changes anything.</p>
+        </div>
+      </header>
+      {note && <p className="settings-hint error">{note}</p>}
+
+      {(connected.length > 0 || others.length > 0) && (
+        <section>
+          <h3>
+            Connected <span>{connected.length + others.length}</span>
+          </h3>
+          <div className="conn-list">
+            {connected.map((c) => linked(added(c.id)!, c.id, c.name, c.about))}
+            {others.map((s) => linked(s, s.name, s.name, "plugin" in s ? `${s.url} · from a plugin` : s.url, "plugin" in s))}
+          </div>
+        </section>
+      )}
+
+      <section>
+        <div className="conn-tools">
+          <label className="conn-search">
+            <Icon name="search" size={14} />
+            <input placeholder="Search connections" value={query} spellCheck={false} onChange={(e) => setQuery(e.target.value)} />
+          </label>
+          <div className="conn-kinds">
+            <button className={kind === "" ? "active" : ""} onClick={() => setKind("")}>
+              All
+            </button>
+            {kinds.map((k) => (
+              <button key={k} className={kind === k ? "active" : ""} onClick={() => setKind(kind === k ? "" : k)}>
+                {k}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="conn-list">
+          {available.map((c) => (
+            <div key={c.id} className="conn-row">
+              <div className="conn-line">
+                <Logo id={c.id} name={c.name} />
+                <div className="conn-main">
+                  <strong>
+                    {c.name} <span className="conn-kind">{c.kind}</span>
+                  </strong>
+                  <small>{c.about}</small>
+                </div>
+                <button className="settings-button" disabled={busy !== null} onClick={() => void connect(c)}>
+                  {busy === c.id ? (
+                    "Finish in your browser…"
+                  ) : (
+                    <>
+                      <Icon name="plus" size={13} />
+                      Connect
+                    </>
+                  )}
+                </button>
+              </div>
+            </div>
+          ))}
+          {waiting.map((c) => (
+            <div key={c.id} className="conn-row soon">
+              <div className="conn-line">
+                <Logo id={c.id} name={c.name} />
+                <div className="conn-main">
+                  <strong>
+                    {c.name} <span className="conn-kind">{c.kind}</span>
+                  </strong>
+                  <small>{c.about}</small>
+                </div>
+                <span className="conn-soon" title={c.ready === "not_built" ? "Runs on this Mac. Not built yet." : "This service only lets apps it has approved sign people in, and Lokus is not registered with it yet."}>
+                  Coming soon
+                </span>
+              </div>
+            </div>
+          ))}
+          {available.length + waiting.length === 0 && <p className="conn-none">Nothing matches. You can still add a server by its address below.</p>}
+        </div>
+      </section>
+
+      <section>
+        <div className="conn-list">
+          {apis.map((a) => (
+            <div key={a.name} className="conn-row linked">
+              <div className="conn-line">
+                <span className="conn-logo plain">{a.name.slice(0, 1).toUpperCase()}</span>
+                <div className="conn-main">
+                  <strong>{a.name}</strong>
+                  <small>
+                    <span className={`conn-state${a.enabled ? "" : " off"}`}>{a.enabled ? "Connected" : "Switched off"}</span>
+                    {a.url}
+                    {settings.api_keys?.includes(a.name) ? "" : " · no key saved"}
+                  </small>
+                </div>
+                <button role="switch" aria-checked={a.enabled} aria-label={`Use ${a.name}`} className={`switch${a.enabled ? " on" : ""}`} onClick={() => void save({ apis: apis.map((x) => (x.name === a.name ? { ...x, enabled: !x.enabled } : x)) })} />
+                <button className="link" onClick={() => void removeApi(a.name)}>
+                  Remove
+                </button>
+              </div>
+            </div>
+          ))}
+          <div className="conn-row">
+            <div className="conn-line">
+              <span className="conn-logo plain">
+                <Icon name="globe" size={16} />
+              </span>
+              <div className="conn-main">
+                <strong>Your own product’s API</strong>
+                <small>If your product has an admin or staff API, the assistant can read from it and, when you allow it, act in it. Nothing to build on your side.</small>
+              </div>
+              {!addingApi && (
+                <button className="settings-button" onClick={() => setAddingApi(true)}>
+                  <Icon name="plus" size={13} />
+                  Add
+                </button>
+              )}
+            </div>
+            {addingApi && (
+              <div className="conn-own api">
+                <input autoFocus value={api.name} placeholder="Name, like clean" onChange={(e) => setApi({ ...api, name: e.target.value })} />
+                <input value={api.url} placeholder="https://app.yourproduct.com" onChange={(e) => setApi({ ...api, url: e.target.value })} />
+                <input type="password" value={api.key} placeholder="Key (sent as a Bearer token)" autoComplete="off" onChange={(e) => setApi({ ...api, key: e.target.value })} />
+                <textarea value={api.about} rows={3} placeholder="Where should the assistant start? For example: Start with GET /v1/admin. It lists every route and what each answers." onChange={(e) => setApi({ ...api, about: e.target.value })} />
+                <button className="settings-button" onClick={() => void addApi()}>
+                  Add
+                </button>
+                <button className="link" onClick={() => setAddingApi(false)}>
+                  Cancel
+                </button>
+              </div>
+            )}
+          </div>
+          <div className="conn-row">
+            <div className="conn-line">
+              <span className="conn-logo plain">
+                <Icon name="plug" size={16} />
+              </span>
+              <div className="conn-main">
+                <strong>Your own tool server</strong>
+                <small>Connect any MCP server by its address.</small>
+              </div>
+              {!adding && (
+                <button className="settings-button" onClick={() => setAdding(true)}>
+                  <Icon name="plus" size={13} />
+                  Add
+                </button>
+              )}
+            </div>
+            {adding && (
+              <div className="conn-own">
+                <input autoFocus value={own.name} placeholder="Name" onChange={(e) => setOwn({ ...own, name: e.target.value })} />
+                <input value={own.url} placeholder="https://example.com/mcp" onChange={(e) => setOwn({ ...own, url: e.target.value })} />
+                <input type="password" value={own.token} placeholder="Token (optional)" autoComplete="off" onChange={(e) => setOwn({ ...own, token: e.target.value })} />
+                <button className="settings-button" onClick={() => void addOwn()}>
+                  Add
+                </button>
+                <button className="link" onClick={() => setAdding(false)}>
+                  Cancel
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      </section>
+      <section className="settings-section">
+        <WorkspaceKeys />
+      </section>
+    </div>
+  );
+}

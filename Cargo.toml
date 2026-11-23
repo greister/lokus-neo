@@ -1,0 +1,25 @@
+[workspace]
+resolver = "2"
+members = ["crates/lokus-core", "crates/lokus-cli", "crates/lokus-sync", "crates/lokus-server", "crates/lokus-ai", "apps/desktop"]
+
+[workspace.package]
+version = "2.0.0-alpha.0"
+edition = "2021"
+rust-version = "1.85"
+license = "FCL-1.0-MIT"
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+yrs = "0.28"
+base64 = "0.22"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "net", "signal"] }
+rusqlite = { version = "0.37", features = ["bundled"] }
+uuid = { version = "1", features = ["v4"] }
+futures-util = "0.3"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true

@@ -1,0 +1,53 @@
+/** @part-of ui.shell */
+import "@fontsource-variable/inter";
+import "@fontsource-variable/jetbrains-mono";
+import "./shell/styles/tokens.css";
+import "./shell/styles/app.css";
+import "./shell/styles/work.css";
+import "./shell/styles/onboarding.css";
+import "./shell/styles/density.css";
+import "./editor/editor.css";
+import { preferences } from "./shell/preferences";
+import { aboutApp } from "./bridge/updates";
+
+import { createRoot } from "react-dom/client";
+
+import { describe, startAnalytics, watchErrors } from "./bridge/analytics";
+import { DEV_CHANNEL, serveDevCommands } from "./bridge/dev";
+import { isMainWindow } from "./bridge/core";
+import { followNoticed, startWatching } from "./features/noticed/noticed";
+import { onboarding, startOnboarding } from "./features/onboarding/onboarding";
+import { watchInvites } from "./features/teams/invites";
+import { startPlugins } from "./features/plugins/host";
+import { startUpdates } from "./features/updates/updates";
+import { App } from "./shell/App";
+import { installShortcuts, runCommand } from "./shell/commands";
+import { registerAllCommands } from "./shell/registerCommands";
+import { installNativeMenu } from "./shell/nativeMenu";
+import { boot, saveAll } from "./shell/workspace";
+
+void startAnalytics();
+watchErrors();
+void aboutApp().then((a) => describe({ app_version: a.version, platform: a.platform, arch: a.arch, window: isMainWindow() ? "main" : "extra" }), () => {});
+describe({ density: preferences.get().density, detail: preferences.get().detail, layout: preferences.get().layout, theme: preferences.get().theme });
+registerAllCommands();
+installShortcuts();
+void installNativeMenu().catch((error) => console.error("Could not connect native menus", error));
+serveDevCommands(runCommand);
+startPlugins();
+if (DEV_CHANNEL) void import("./shell/devCommands").then((m) => m.registerDevCommands());
+window.addEventListener("blur", () => void saveAll());
+
+createRoot(document.getElementById("root")!).render(<App />);
+// The setup and the update pop-up belong to the first window; a second one opens straight to work.
+// The stylesheet leaves room for a Mac's window buttons; elsewhere the system draws its own bar.
+document.documentElement.dataset.platform = /Mac/i.test(navigator.userAgent) ? "mac" : /Windows/i.test(navigator.userAgent) ? "windows" : "linux";
+void boot().then(() => {
+  if (!isMainWindow()) return;
+  startOnboarding();
+  watchInvites(() => onboarding.get().open);
+});
+if (isMainWindow()) startUpdates();
+// One window does the looking; every window shows what was found.
+if (isMainWindow()) startWatching();
+else followNoticed();
